@@ -132,10 +132,10 @@ export default function AgentDocumentsPage() {
           return;
         }
 
-        if (!agentProfile) {
+        if (!agentProfile?.agent_type) {
           if (mounted) {
             setErrorMessage(
-              "Your Agent profile was not found. Please restart the Agent application."
+              "Your Agent type could not be found. Please return to the Agent application and try again."
             );
             setLoading(false);
           }
@@ -254,6 +254,45 @@ export default function AgentDocumentsPage() {
     }
   }
 
+  async function getCurrentAgentType(): Promise<AgentType | null> {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) {
+      throw new Error(
+        `Could not verify your session: ${userError.message}`
+      );
+    }
+
+    if (!user) {
+      router.replace("/login");
+      return null;
+    }
+
+    const {
+      data: agentProfile,
+      error: agentError,
+    } = await supabase
+      .from("agent_profiles")
+      .select("agent_type")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (agentError) {
+      throw new Error(
+        `Could not load your Agent profile: ${agentError.message}`
+      );
+    }
+
+    if (!agentProfile?.agent_type) {
+      return null;
+    }
+
+    return agentProfile.agent_type as AgentType;
+  }
+
   async function handleSubmit(
     event: FormEvent<HTMLFormElement>
   ) {
@@ -261,29 +300,92 @@ export default function AgentDocumentsPage() {
 
     setErrorMessage("");
 
-    if (!agentType) {
-      setErrorMessage(
-        "We could not determine your Agent type. Please restart your application."
-      );
-      return;
-    }
-
-    const missingDocuments = documents
-      .filter((document) => document.required)
-      .filter((document) => !files[document.type]);
-
-    if (missingDocuments.length > 0) {
-      setErrorMessage(
-        `Please upload: ${missingDocuments
-          .map((document) => document.title)
-          .join(", ")}.`
-      );
-      return;
-    }
-
     setSubmitting(true);
 
     try {
+      /*
+       * Make sure we always have the latest Agent Type
+       * directly from Supabase before validating documents.
+       *
+       * This prevents the form from failing just because
+       * the React state lost the Agent Type.
+       */
+      let currentAgentType = agentType;
+
+      if (!currentAgentType) {
+        currentAgentType = await getCurrentAgentType();
+
+        if (currentAgentType) {
+          setAgentType(currentAgentType);
+        }
+      }
+
+      if (!currentAgentType) {
+        throw new Error(
+          "Your Agent type could not be found. Please return to the Agent application and try again."
+        );
+      }
+
+      const requiresVehicle =
+        currentAgentType === "driver" ||
+        currentAgentType === "motorcycle_rider";
+
+      const currentDocuments: DocumentItem[] = [
+        {
+          type: "national_id",
+          title: "National ID",
+          description:
+            "Upload a clear photo or PDF of your valid national ID.",
+          accept:
+            "image/jpeg,image/png,image/webp,application/pdf",
+          required: true,
+          icon: "🪪",
+        },
+        {
+          type: "driving_license",
+          title: "Driving License",
+          description:
+            "Upload your valid driving license.",
+          accept:
+            "image/jpeg,image/png,image/webp,application/pdf",
+          required: requiresVehicle,
+          icon: "📄",
+        },
+        {
+          type: "vehicle_registration",
+          title: "Vehicle Registration",
+          description:
+            "Upload the vehicle registration document.",
+          accept:
+            "image/jpeg,image/png,image/webp,application/pdf",
+          required: requiresVehicle,
+          icon: "🚘",
+        },
+        {
+          type: "profile_photo",
+          title: "Profile Photo",
+          description:
+            "Upload a clear recent photo of yourself.",
+          accept:
+            "image/jpeg,image/png,image/webp",
+          required: true,
+          icon: "👤",
+        },
+      ];
+
+      const missingDocuments = currentDocuments
+        .filter((document) => document.required)
+        .filter((document) => !files[document.type]);
+
+      if (missingDocuments.length > 0) {
+        setErrorMessage(
+          `Please upload: ${missingDocuments
+            .map((document) => document.title)
+            .join(", ")}.`
+        );
+        return;
+      }
+
       const {
         data: { user },
         error: userError,
@@ -300,7 +402,7 @@ export default function AgentDocumentsPage() {
         return;
       }
 
-      for (const document of documents) {
+      for (const document of currentDocuments) {
         const file = files[document.type];
 
         if (!file) {
@@ -693,7 +795,7 @@ export default function AgentDocumentsPage() {
 
                   <div>
                     <p className="text-sm font-black text-red-800">
-                      We could not load your Agent application
+                      Application Error
                     </p>
 
                     <p className="mt-1 text-sm leading-6 text-red-700">
